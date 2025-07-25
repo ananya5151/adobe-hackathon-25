@@ -6,6 +6,12 @@ import datetime
 from sentence_transformers import SentenceTransformer, util
 import torch
 from . import round_1a
+from .round_1a import (
+    extract_text_blocks,
+    get_body_text_style,
+    identify_and_classify_headings,
+    group_text_into_sections,
+)
 
 # Define the path to the local model
 MODEL_PATH = 'models/all-MiniLM-L6-v2'
@@ -49,12 +55,12 @@ def generate_ranked_sections_from_pdf(pdf_paths, persona, job):
     for pdf_path in pdf_paths:
         doc_name = os.path.basename(pdf_path)
         print(f"Extracting sections from {doc_name}...")
-        blocks = round_1a.extract_text_blocks(pdf_path)
+        blocks = extract_text_blocks(pdf_path)
         if not blocks:
             continue
-        body_size, body_name = round_1a.get_body_text_style(blocks)
-        headings, _ = round_1a.identify_and_classify_headings(blocks, body_size, body_name)
-        sections = round_1a.group_text_into_sections(blocks, headings)
+        body_size, body_name = get_body_text_style(blocks)
+        headings, _ = identify_and_classify_headings(blocks, body_size, body_name)
+        sections = group_text_into_sections(blocks, headings)
         for section in sections:
             section['document'] = doc_name  # Tag section with its source document
         all_sections.extend(sections)

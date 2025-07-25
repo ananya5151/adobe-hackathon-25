@@ -1,3 +1,4 @@
-pymupdf
-sentence-transformers
-torch
+PyMuPDF==1.24.1
+sentence-transformers==2.7.0
+torch==2.1.2
+transformers==4.36.2

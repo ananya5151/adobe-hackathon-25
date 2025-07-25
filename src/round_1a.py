@@ -62,6 +62,49 @@ def identify_and_classify_headings(blocks_data, body_size, body_name):
     headings.sort(key=lambda x: x['page'])
     return headings, title_info
 
+def group_text_into_sections(blocks, headings):
+    """Groups text blocks under their corresponding headings to form sections."""
+    if not headings:
+        return []
+
+    # Create a lookup for heading blocks to easily identify them
+    heading_blocks = {(h['text'], h['page']) for h in headings}
+    sections = []
+    current_section_content = []
+    current_heading = None
+
+    # Sort blocks by page and position to process them in document order
+    # We assume the initial block order from PyMuPDF is correct.
+
+    for i, block in enumerate(blocks):
+        is_heading = (block['text'], block['page']) in heading_blocks
+
+        if is_heading:
+            # If we find a new heading, save the previous section first
+            if current_heading:
+                sections.append({
+                    'heading_text': current_heading['text'],
+                    'content': current_heading['text'] + ' ' + ' '.join(current_section_content),
+                    'page': current_heading['page']
+                })
+            
+            # Start a new section
+            current_heading = block
+            current_section_content = []
+        elif current_heading:
+            # If it's a normal text block, add it to the current section's content
+            current_section_content.append(block['text'])
+
+    # Add the last section after the loop finishes
+    if current_heading:
+        sections.append({
+            'heading_text': current_heading['text'],
+            'content': current_heading['text'] + ' ' + ' '.join(current_section_content),
+            'page': current_heading['page']
+        })
+
+    return sections
+
 def generate_outline_from_pdf(pdf_path):
     """Generates a structured JSON outline from a PDF file."""
     blocks_data = extract_text_blocks(pdf_path)
