@@ -1,130 +1,168 @@
 import fitz  # PyMuPDF
 import json
+import statistics
 from collections import Counter
+import re
 
-def extract_text_blocks(pdf_path):
-    """Extracts text blocks with metadata from a PDF file."""
-    doc = fitz.open(pdf_path)
+def extract_text_blocks(doc, page_limit=None):
+    """Extracts all text blocks from a PDF with metadata."""
     blocks_data = []
-    for page_num, page in enumerate(doc):
+    pages_to_process = range(len(doc))
+    if page_limit is not None:
+        pages_to_process = range(min(len(doc), page_limit))
+
+    for page_num in pages_to_process:
+        page = doc[page_num]
         blocks = page.get_text("dict", flags=11)["blocks"]
         for b in blocks:
             for l in b["lines"]:
                 for s in l["spans"]:
-                    if s["text"].strip():
-                        blocks_data.append({
-                            "text": s["text"].strip(),
-                            "font_size": s["size"],
-                            "font_name": s["font"],
-                            "page": page_num + 1
-                        })
+                    text = s["text"].strip()
+                    if not text:
+                        continue
+                    blocks_data.append({
+                        "text": text,
+                        "font_size": s["size"],
+                        "font_name": s["font"],
+                        "page": page_num + 1,
+                        "y_pos": s["bbox"][1]
+                    })
     return blocks_data
 
-def get_body_text_style(blocks_data):
-    """Determines the most common font size and name from the text blocks."""
-    if not blocks_data:
-        return None, None
-    font_sizes = [block['font_size'] for block in blocks_data]
-    font_names = [block['font_name'] for block in blocks_data]
-    most_common_size = Counter(font_sizes).most_common(1)[0][0]
-    most_common_name = Counter(font_names).most_common(1)[0][0]
-    return most_common_size, most_common_name
+def get_body_text_style(blocks):
+    """Determines the most common font size and name, likely the body text."""
+    if not blocks:
+        return 12, "default"
+    # Filter out very large fonts to prevent titles from skewing the body text calculation
+    font_sizes = [b['font_size'] for b in blocks if b['font_size'] < 20]
+    if not font_sizes:
+        font_sizes = [b['font_size'] for b in blocks] # Fallback if all fonts are large
+        
+    try:
+        body_size = statistics.mode(font_sizes)
+    except statistics.StatisticsError:
+        body_size = sorted(Counter(font_sizes).items(), key=lambda x: x[1], reverse=True)[0][0]
+    return body_size, "" # Font name is less reliable, focus on size
 
-def identify_and_classify_headings(blocks_data, body_size, body_name):
-    """Identifies and classifies headings from text blocks based on heuristics."""
-    if not blocks_data:
-        return [], None
-    heading_candidates = []
-    for block in blocks_data:
-        is_larger = block['font_size'] > body_size
-        is_bold = "bold" in block['font_name'].lower()
-        is_short = len(block['text'].split()) < 20
-        no_period_end = not block['text'].endswith('.')
-        if is_larger and (is_bold or no_period_end) and is_short:
-            heading_candidates.append(block)
-    if not heading_candidates:
-        return [], None
-    title_info = None
-    first_page_blocks = [b for b in heading_candidates if b['page'] == 1]
-    if first_page_blocks:
-        title_candidate = max(first_page_blocks, key=lambda x: x['font_size'])
-        title_info = {"text": title_candidate["text"], "page": title_candidate["page"]}
-        heading_candidates.remove(title_candidate)
-    unique_heading_sizes = sorted(list(set(h['font_size'] for h in heading_candidates)), reverse=True)
-    size_to_level_map = {size: f"h{i + 1}" for i, size in enumerate(unique_heading_sizes)}
+def identify_and_classify_headings(blocks, body_size):
+    """Identifies headings using a scoring system and classifies them."""
     headings = []
-    for head in heading_candidates:
-        headings.append({
-            "text": head["text"],
-            "level": size_to_level_map.get(head["font_size"], "unknown"),
-            "page": head["page"]
-        })
-    headings.sort(key=lambda x: x['page'])
-    return headings, title_info
+    title_info = None
+
+    # --- Find Title ---
+    first_page_blocks = [b for b in blocks if b['page'] == 1]
+    if first_page_blocks:
+        max_font_size = max(b['font_size'] for b in first_page_blocks)
+        # The title is often the first occurrence of the largest font size
+        for b in first_page_blocks:
+            if b['font_size'] == max_font_size:
+                title_info = {'text': b['text'], 'page': 1}
+                break
+
+    # --- Smart Heading Identification using a Scoring System ---
+    heading_candidates = []
+    # Regex to find patterns like 1. 1.1. A. etc.
+    heading_pattern = re.compile(r'^\s*(\d+(\.\d+)*\.?|[A-Z]\.)\s+')
+
+    for b in blocks:
+        text = b['text']
+        font_size = b['font_size']
+        font_name = b['font_name'].lower()
+        
+        # Skip the title itself
+        if title_info and text == title_info['text'] and b['page'] == 1:
+            continue
+
+        score = 0
+        # Criterion 1: Font size is larger than body text
+        if font_size > body_size + 1:
+            score += 2
+        # Criterion 2: Font is bold
+        if 'bold' in font_name:
+            score += 1
+        # Criterion 3: Starts with a numbering pattern
+        if heading_pattern.match(text):
+            score += 5 # This is a very strong indicator
+        # Criterion 4: It's short (likely not a full paragraph)
+        if len(text.split()) < 15:
+            score += 1
+        # Criterion 5: All caps (but not too short, to avoid single letters)
+        if text.isupper() and len(text) > 2:
+            score += 1
+
+        if score >= 4: # Tune this threshold as needed
+             heading_candidates.append(b)
+
+    # --- Classify Cleaned Headings ---
+    if not heading_candidates:
+        return [], title_info
+
+    # Use font sizes to determine H1, H2, H3 levels from the clean candidates
+    heading_styles = sorted(list(set(b['font_size'] for b in heading_candidates)), reverse=True)
+    style_map = {style: f"H{i+1}" for i, style in enumerate(heading_styles[:3])}
+
+    for b in heading_candidates:
+        if b['font_size'] in style_map:
+            headings.append({
+                "level": style_map[b['font_size']],
+                "text": b['text'],
+                "page": b['page'],
+                "y_pos": b['y_pos']
+            })
+
+    return sorted(headings, key=lambda x: (x['page'], x['y_pos'])), title_info
+
 
 def group_text_into_sections(blocks, headings):
-    """Groups text blocks under their corresponding headings to form sections."""
-    if not headings:
-        return []
-
-    # Create a lookup for heading blocks to easily identify them
-    heading_blocks = {(h['text'], h['page']) for h in headings}
+    """Groups raw text blocks under the most recent heading."""
     sections = []
-    current_section_content = []
-    current_heading = None
+    if not headings: return []
 
-    # Sort blocks by page and position to process them in document order
-    # We assume the initial block order from PyMuPDF is correct.
+    for i, heading in enumerate(headings):
+        start_page = heading['page']
+        start_y = heading['y_pos']
+        
+        # Determine the boundary of the section
+        end_page = headings[i+1]['page'] if i + 1 < len(headings) else float('inf')
+        end_y = headings[i+1]['y_pos'] if i + 1 < len(headings) else float('inf')
 
-    for i, block in enumerate(blocks):
-        is_heading = (block['text'], block['page']) in heading_blocks
-
-        if is_heading:
-            # If we find a new heading, save the previous section first
-            if current_heading:
-                sections.append({
-                    'heading_text': current_heading['text'],
-                    'content': current_heading['text'] + ' ' + ' '.join(current_section_content),
-                    'page': current_heading['page']
-                })
+        content = ""
+        for block in blocks:
+            is_after_start = block['page'] > start_page or (block['page'] == start_page and block['y_pos'] > start_y)
+            is_before_end = block['page'] < end_page or (block['page'] == end_page and block['y_pos'] < end_y)
             
-            # Start a new section
-            current_heading = block
-            current_section_content = []
-        elif current_heading:
-            # If it's a normal text block, add it to the current section's content
-            current_section_content.append(block['text'])
-
-    # Add the last section after the loop finishes
-    if current_heading:
+            # Ensure the block is not another heading
+            is_heading = any(h['text'] == block['text'] and h['page'] == block['page'] for h in headings)
+            
+            if is_after_start and is_before_end and not is_heading:
+                content += block['text'] + "\n"
+        
         sections.append({
-            'heading_text': current_heading['text'],
-            'content': current_heading['text'] + ' ' + ' '.join(current_section_content),
-            'page': current_heading['page']
+            'heading_text': heading['text'],
+            'heading_level': heading['level'],
+            'page': heading['page'],
+            'content': content.strip()
         })
-
     return sections
 
+
 def generate_outline_from_pdf(pdf_path):
-    """Generates a structured JSON outline from a PDF file."""
-    blocks_data = extract_text_blocks(pdf_path)
-    if not blocks_data:
-        return json.dumps({"title": "", "outline": []}, indent=4)
+    """Main function for Round 1A to generate a structured JSON outline."""
+    try:
+        doc = fitz.open(pdf_path)
+    except Exception as e:
+        return json.dumps({"error": f"Could not open PDF: {e}"})
 
-    body_size, body_name = get_body_text_style(blocks_data)
-    if not body_size or not body_name:
-        return json.dumps({"title": "", "outline": []}, indent=4)
+    blocks = extract_text_blocks(doc)
+    doc.close()
+    if not blocks: return json.dumps({"title": "", "outline": []})
 
-    headings, title_info = identify_and_classify_headings(blocks_data, body_size, body_name)
-
-    # Format the final JSON output to match the required schema
-    formatted_headings = [
-        {"level": h['level'].upper(), "text": h['text'], "page": h['page']}
-        for h in headings
-    ]
-
-    output_json = {
-        "title": title_info["text"] if title_info else "",
-        "outline": formatted_headings
-    }
+    body_size, _ = get_body_text_style(blocks)
+    headings, title_info = identify_and_classify_headings(blocks, body_size)
+    
+    title = title_info['text'] if title_info else "Untitled"
+    
+    outline = [{"level": h['level'], "text": h['text'], "page": h['page']} for h in headings]
+    
+    output_json = {"title": title, "outline": outline}
     return json.dumps(output_json, indent=4)
