@@ -1,52 +1,79 @@
-# Adobe Hackathon - PDF Intelligence Engine
+# Adobe Hackathon 2025: Connecting the Dots
 
-This project is a solution for the Adobe Hackathon, designed to extract structured information from PDF documents and rank sections based on semantic relevance to a user's query.
+This project is a solution for the Adobe Hackathon, designed to intelligently process PDF documents. It features a hybrid system that performs two main tasks: multilingual structure extraction (Round 1A) and AI-powered document intelligence (Round 1B), all orchestrated to run offline within a Docker container.
+
+---
 
 ## Approach
 
-The solution is divided into two main rounds, each building upon the last.
+The solution is driven by a central orchestrator that routes tasks based on the input folder structure, allowing for both types of analysis in a single run.
 
-### Round 1A: Outline Extraction
+### Round 1A: Multilingual Structure Extraction
 
-The primary goal of Round 1A is to extract a structured outline (Title and Headings) from a PDF document. The approach is based on a set of heuristics, as simply relying on font size is not always reliable.
+The goal of Round 1A is to extract a structured outline (Title and Headings) from any PDF, regardless of the language. 
 
-1.  **Text Block Extraction**: The process begins by using the `PyMuPDF` (fitz) library to extract all text blocks from the PDF. Crucially, this extraction includes metadata for each text span, such as its font size, font name, and page number.
+**This approach is specifically designed to fulfill the multilingual bonus requirement. It successfully generates accurate outlines for documents in languages like Hindi and Japanese because it does not rely solely on font sizes.**
 
-2.  **Body Text Identification**: To find headings, we first need a baseline for what constitutes normal body text. The script analyzes all extracted text blocks to find the most common (mode) font size and font name. This combination is assumed to be the standard style for paragraph text.
+The method uses a **multi-factor heuristic scoring system** for high accuracy:
 
-3.  **Heading Detection Heuristics**: Any text block that deviates from the body text style is considered a potential heading. The following rules are applied:
-    *   **Font Size**: Must be larger than the body text font size.
-    *   **Font Weight**: The font name contains "Bold" (a common indicator).
-    *   **Line Length**: The line is short (headings are typically not long sentences).
-    *   **Punctuation**: The line does not end with a period.
+1.  **Line Property Extraction**: The process begins by using `pdfplumber` to extract all text lines from the PDF. This includes crucial metadata for each line, such as its font size, font weight (bold), and position on the page.
 
-4.  **Title and Heading Classification**: The document's title is identified as the text with the largest font size on the first page. The remaining headings are then classified into levels (H1, H2, H3, etc.) by sorting their unique font sizes in descending order.
+2.  **Document Style Analysis**: To establish a baseline, the script performs a global analysis of all extracted lines to find the most common (mode) font size. This is robustly identified as the document's primary **body text** style.
 
-### Round 1B: Persona-Driven Intelligence
+3.  **Heuristic Scoring**: Each line is assigned a "heading score" based on how much it deviates from the body text. This score is calculated using multiple language-agnostic signals:
+    * **Font Size**: Lines with a font size significantly larger than the body text receive a high score.
+    * **Font Weight**: Bolded text receives a score bonus.
+    * **Text Patterns**: Common patterns (e.g., "Chapter 1", "2.1.3") are given a high score.
+    * **Conciseness**: Shorter lines, which are typical for headings, receive a score bonus.
 
-Round 1B adds a layer of semantic understanding to rank document sections based on their relevance to a user's query.
+4.  **Title and Heading Classification**: The document's title is identified as the highest-scoring line on the first page. The remaining lines that pass a score threshold are first checked against numbering patterns for definitive classification. If no pattern matches, the script falls back to ranking them into levels (H1, H2, H3) by sorting their unique font sizes in descending order.
 
-1.  **Section Grouping**: A "section" is defined as a heading plus all the text content that follows it, up to the next heading. A function groups the raw text blocks from the PDF into these structured sections.
+### Round 1B: AI-Powered Document Intelligence
 
-2.  **Semantic Embeddings**: The `Sentence-Transformers` library is used with the `all-MiniLM-L6-v2` model. This lightweight (~86MB) but powerful model converts both the user's query and the text content of each section into numerical vectors (embeddings).
+Round 1B uses an on-device AI model to understand and rank document sections based on their semantic relevance to a user's specific goal.
 
-3.  **Cosine Similarity**: To measure relevance, the cosine similarity between the user's query vector and each section's vector is calculated. A higher score (closer to 1.0) indicates a stronger semantic match.
+1.  **Orchestration and Configuration**: The `main.py` orchestrator identifies all subfolders not marked as `1a` as part of the Round 1B document collection. The entire process is driven by a central `input/config.json` file, which defines the document set, the user `persona`, and their `job_to_be_done`.
 
-4.  **Ranking**: The sections are then sorted in descending order based on their cosine similarity score to produce the final importance ranking.
+2.  **Structural Sectioning**: To get clean, meaningful sections, the script first runs an internal analysis (similar to the advanced Round 1A logic) to identify the document's actual headings. The text between one heading and the next is treated as a single, coherent section. This provides accurate section titles and content for analysis.
 
-## Libraries and Models
+3.  **Semantic Embeddings**: The `Sentence-Transformers` library is used with the `all-MiniLM-L6-v2` model. This lightweight (~86MB) but powerful model converts both the user's query (persona + job) and the text content of each section into numerical vectors (embeddings) that capture their semantic meaning.
 
-*   **Programming Language**: Python 3.9
-*   **PDF Parsing**: `PyMuPDF` (fitz)
-*   **NLP / Semantic Model**: `Sentence-Transformers` with the `all-MiniLM-L6-v2` model.
-*   **Core Libraries**: `torch` (for Sentence-Transformers)
+4.  **Cosine Similarity and Ranking**: To measure relevance, the cosine similarity between the user's query vector and each section's vector is calculated. A higher score (closer to 1.0) indicates a stronger semantic match. The sections are then sorted in descending order based on this score to produce the final importance ranking.
 
-## How to Build and Run
+---
+
+## Models and Libraries Used
+
+* **Programming Language**: Python 3.10
+* **PDF Parsing**: `pdfplumber`, `PyPDF2`
+* **AI / NLP Model**: `Sentence-Transformers` with the `all-MiniLM-L6-v2` on-device model.
+* **Core Libraries**: `torch` (CPU version), `numpy`, `scikit-learn`, `nltk`.
+
+---
+
+## How to Build and Run Your Solution
+
+This solution is fully containerized with Docker for easy and reproducible execution.
 
 ### Prerequisites
 
-*   Docker Desktop installed and running.
-*   A sample PDF file placed in the `input/` directory.
+* Docker Desktop installed and running.
+* Python installed locally (for the one-time model download).
+
+### 1. (One-Time) Download AI Model
+
+The AI model must be downloaded before building the Docker image.
+
+```powershell
+# (Optional) Create and activate a virtual environment
+python -m venv .venv
+.\.venv\Scripts\Activate
+
+# Install dependencies required for the download
+pip install -r requirements.txt
+
+# Run the download script
+python download_model.py
 
 ### 1. Build the Docker Image
 
@@ -58,22 +85,12 @@ docker build --platform linux/amd64 -t adobe-solution:latest .
 
 ### 2. Run the Solution
 
-#### For Round 1A (Outline Extraction)
 
-To generate the JSON outline, run the container with the input and output directories mounted:
-
-```bash
-docker run --rm -v $(pwd)/input:/app/input -v $(pwd)/output:/app/output --network none adobe-solution:latest
-```
-
-This will process all PDFs in `input/` and create `*_outline.json` files in the `output/` directory.
-
-#### For Round 1B (Persona-Driven Ranking)
-
-To run the semantic ranking, you need to pass the persona and job-to-be-done as environment variables (`ADOBE_PERSONA` and `ADOBE_JOB`). The script will process all PDFs in the `input/` directory as a single collection.
+The orchestrator handles both rounds in a single command. Prepare your input folder as needed, then run the container.
 
 ```bash
-docker run --rm -v $(pwd)/input:/app/input -v $(pwd)/output:/app/output -e ADOBE_PERSONA="Your Persona Here" -e ADOBE_JOB="Your Job-to-be-Done Here" --network none adobe-solution:latest
+docker run --rm -v "$(pwd)/input:/app/input" -v "$(pwd)/output:/app/output" adobe-hackathon-app
 ```
 
-Replace the placeholder text with the actual persona and job. This will create a single `round_1b_analysis.json` file in the `output/` directory.
+The script will automatically process all configured tests and place the results in the output directory, following the execution flow specified in the hackathon challenge document.
+
