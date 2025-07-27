@@ -1,84 +1,68 @@
-import os
-import json
-import glob
-from .round_1a import generate_outline_from_pdf
-from .round_1b import generate_ranked_sections_from_pdf
+#!/usr/bin/env python3
+"""
+Adobe Hackathon 2025: "Connecting the Dots" - Final Orchestrator
+"""
+import json, logging
+from pathlib import Path
+# --- THIS IS THE FIX: Import the correct class name ---
+from round_1a import PDFStructureExtractor
+from round_1b import DocumentIntelligenceAnalyzer
 
-def main():
-    """
-    Main function to drive the PDF processing workflow.
-    It checks for environment variables to decide whether to run
-    the simple outline extraction (Round 1A) or the persona-driven
-    semantic search (Round 1B).
-    """
-    persona = os.environ.get("ADOBE_PERSONA")
-    job = os.environ.get("ADOBE_JOB")
-    input_dir = "input"
-    output_dir = "output"
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
+class ChallengeOrchestrator:
+    def __init__(self, input_dir="/app/input", output_dir="/app/output"):
+        self.input_dir = Path(input_dir)
+        self.output_dir = Path(output_dir)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.structure_extractor = PDFStructureExtractor()
+        # --- AND FIX THE INSTANTIATION HERE ---
+        self.intelligence_analyzer = DocumentIntelligenceAnalyzer()
 
-    # --- Workflow Selection ---
-    if persona and job:
-        # --- Round 1B: Persona-Driven Semantic Search ---
-        print("Starting Round 1B: Persona-Driven Document Intelligence...")
+    def run_round_1a(self, folder_path: Path):
+        logger.info(f"--- Running Round 1A on folder: {folder_path.name} ---")
+        pdf_files = list(folder_path.glob("*.pdf"))
+        if not pdf_files: return
 
-        # Scan all subdirectories of 'input' for PDFs, excluding '1a'
-        pdf_paths = []
-        for folder in os.listdir(input_dir):
-            folder_path = os.path.join(input_dir, folder)
-            if os.path.isdir(folder_path) and folder != '1a':
-                pdf_paths.extend(glob.glob(os.path.join(folder_path, "*.pdf")))
-
-        if not pdf_paths:
-            print("No PDFs found for Round 1B processing.")
-            return
-
-        print(f"Found {len(pdf_paths)} PDF(s) to process for Round 1B.")
-        
-        # Generate ranked sections
-        ranked_output = generate_ranked_sections_from_pdf(pdf_paths, persona, job)
-
-        # Save the output
-        output_path = os.path.join(output_dir, "round_1b_analysis.json")
-        with open(output_path, "w", encoding="utf-8") as f:
-            json.dump(ranked_output, f, indent=4)
-        
-        print(f"Round 1B analysis complete. Output saved to {output_path}")
-
-    else:
-        # --- Round 1A: Simple Outline Extraction ---
-        print("Starting Round 1A: PDF Outline Extraction...")
-        
-        # Process PDFs only in the 'input/1a' directory
-        round_1a_input_dir = os.path.join(input_dir, "1a")
-        if not os.path.exists(round_1a_input_dir):
-            print(f"Directory not found: {round_1a_input_dir}")
-            return
-
-        pdf_paths = glob.glob(os.path.join(round_1a_input_dir, "*.pdf"))
-
-        if not pdf_paths:
-            print(f"No PDFs found in {round_1a_input_dir}.")
-            return
-
-        for pdf_path in pdf_paths:
-            print(f"Processing {os.path.basename(pdf_path)} for Round 1A...")
+        output_1a_dir = self.output_dir / folder_path.name
+        output_1a_dir.mkdir(exist_ok=True)
+        for pdf_file in pdf_files:
             try:
-                outline_json = generate_outline_from_pdf(pdf_path)
-                
-                output_filename = f"{os.path.splitext(os.path.basename(pdf_path))[0]}_outline.json"
-                output_path = os.path.join(output_dir, output_filename)
-                with open(output_path, "w", encoding="utf-8") as f:
-                    f.write(outline_json)
-                print(f"Outline saved to {output_path}")
-
+                result = self.structure_extractor.extract_pdf_outline(str(pdf_file))
+                output_path = output_1a_dir / f"{pdf_file.stem}_outline.json"
+                with open(output_path, 'w', encoding='utf-8') as f:
+                    json.dump(result, f, indent=4, ensure_ascii=False)
+                logger.info(f"Saved 1A outline to {output_path}")
             except Exception as e:
-                print(f"Error processing {os.path.basename(pdf_path)}: {e}")
+                logger.error(f"Error in Round 1A on {pdf_file.name}: {e}")
 
-        print("Round 1A processing complete.")
+    def run_round_1b(self, config_path: Path):
+        logger.info("--- Running Round 1B with AI Document Intelligence ---")
+        try:
+            with open(config_path, 'r', encoding='utf-8') as f: config = json.load(f)
+            result = self.intelligence_analyzer.analyze_documents(
+                documents=config.get('documents', []),
+                persona=config.get('persona', {}),
+                job_to_be_done=config.get('job_to_be_done', {}),
+                input_dir=str(self.input_dir)
+            )
+            output_path = self.output_dir / "intelligence_analysis.json"
+            with open(output_path, 'w', encoding='utf-8') as f:
+                json.dump(result, f, indent=4, ensure_ascii=False)
+            logger.info(f"Saved 1B analysis to {output_path}")
+        except Exception as e:
+            logger.error(f"Critical error in Round 1B: {e}", exc_info=True)
 
+    def run(self):
+        logger.info("Starting Adobe Hackathon Submission Orchestrator")
+        subfolders = [f for f in self.input_dir.iterdir() if f.is_dir()]
+        for folder in subfolders:
+            if '1a' in folder.name.lower(): self.run_round_1a(folder)
+        
+        config_path = self.input_dir / "config.json"
+        if config_path.exists(): self.run_round_1b(config_path)
+        logger.info("All tasks completed.")
 
 if __name__ == "__main__":
-    main()
+    ChallengeOrchestrator().run()

@@ -6,7 +6,7 @@ This document provides a detailed explanation of the technical approach, design 
 
 The solution is architected as an offline-first, containerized Python application. The key design principles were:
 
-*   **Portability and Reproducibility**: Using Docker ensures that the application runs in a consistent environment with all dependencies pre-installed, regardless of the host machine. The `Dockerfile` is configured to be built for `linux/amd64` architecture as required.
+*   **Portabilityaa and Reproducibility**: Using Docker ensures that the application runs in a consistent environment with all dependencies pre-installed, regardless of the host machine. The `Dockerfile` is configured to be built for `linux/amd64` architecture as required.
 *   **Offline Capability**: All required models and libraries are included within the Docker image. The `--network none` flag can be used during execution to guarantee no external network calls are made.
 *   **Flexibility**: A single entrypoint (`main.py`) is used for both rounds. The execution path is determined at runtime by the presence of the `ADOBE_QUERY` environment variable, which is a clean and standard way to configure container behavior.
 

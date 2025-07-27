@@ -1,5 +1,8 @@
-PyMuPDF==1.24.1
-sentence-transformers==2.7.0
-numpy<2.0
-torch==2.1.2
-transformers==4.36.2
+pdfplumber
+PyPDF2
+sentence-transformers
+torch
+nltk
+numpy
+scikit-learn
+# PyMuPDF is commented out as it was removed in the recent edits    

@@ -1,13 +1,18 @@
-# Virtual Environment
+# Python virtual environment
+.venv/
 venv/
 
-# Output directory
+# AI Model folder (it's large and can be regenerated)
+models/
+
+# Generated output folder
 output/
 
-# Python cache
+# Python cache files
 __pycache__/
 *.pyc
 
-# IDE specific
+# IDE and OS files
 .vscode/
 .idea/
+*.DS_Store

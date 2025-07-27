@@ -1,16 +1,11 @@
+import os
 from sentence_transformers import SentenceTransformer
 
-def download_model():
-    """Downloads and saves the specified Sentence-Transformers model."""
-    # This model is small (~86MB) and powerful.
-    model_name = 'all-MiniLM-L6-v2'
-    print(f"Downloading model: {model_name}...")
-    
-    model = SentenceTransformer(model_name)
-    save_path = 'models/all-MiniLM-L6-v2'
-    model.save(save_path)
-    
-    print(f"Model '{model_name}' downloaded and saved to '{save_path}'")
+MODEL_NAME = "all-MiniLM-L6-v2"
+MODEL_PATH = os.path.join("models", MODEL_NAME)
 
 if __name__ == "__main__":
-    download_model()
+    print(f"Downloading model: {MODEL_NAME} to {MODEL_PATH}")
+    os.makedirs(MODEL_PATH, exist_ok=True)
+    SentenceTransformer(MODEL_NAME).save(MODEL_PATH)
+    print("Model download complete.")

@@ -1,0 +1,17 @@
+{
+  "documents": [
+    { "filename": "1b_France_Trip/South of France - Cities.pdf" },
+    { "filename": "1b_France_Trip/South of France - Cuisine.pdf" },
+    { "filename": "1b_France_Trip/South of France - History.pdf" },
+    { "filename": "1b_France_Trip/South of France - Restaurants and Hotels.pdf" },
+    { "filename": "1b_France_Trip/South of France - Things to Do.pdf" },
+    { "filename": "1b_France_Trip/South of France - Tips and Tricks.pdf" },
+    { "filename": "1b_France_Trip/South of France - Traditions and Culture.pdf" }
+  ],
+  "persona": {
+    "role": "Travel Planner"
+  },
+  "job_to_be_done": {
+    "task": "Plan a trip of 4 days for a group of 10 college friends."
+  }
+}

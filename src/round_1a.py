@@ -1,168 +1,113 @@
-import fitz  # PyMuPDF
-import json
-import statistics
-from collections import Counter
+#!/usr/bin/env python3
+"""
+Round 1a: PDF Structure Extraction
+Extract structured outlines (title, headings) from PDF documents.
+"""
 import re
+import logging
+from pathlib import Path
+from typing import Dict, List, Any
+from datetime import datetime
 
-def extract_text_blocks(doc, page_limit=None):
-    """Extracts all text blocks from a PDF with metadata."""
-    blocks_data = []
-    pages_to_process = range(len(doc))
-    if page_limit is not None:
-        pages_to_process = range(min(len(doc), page_limit))
+try:
+    import pdfplumber
+    from PyPDF2 import PdfReader
+except ImportError as e:
+    logging.error(f"Required libraries not installed for Round 1A: {e}")
+    raise
 
-    for page_num in pages_to_process:
-        page = doc[page_num]
-        blocks = page.get_text("dict", flags=11)["blocks"]
-        for b in blocks:
-            for l in b["lines"]:
-                for s in l["spans"]:
-                    text = s["text"].strip()
-                    if not text:
-                        continue
-                    blocks_data.append({
-                        "text": text,
-                        "font_size": s["size"],
-                        "font_name": s["font"],
-                        "page": page_num + 1,
-                        "y_pos": s["bbox"][1]
-                    })
-    return blocks_data
+logger = logging.getLogger(__name__)
 
-def get_body_text_style(blocks):
-    """Determines the most common font size and name, likely the body text."""
-    if not blocks:
-        return 12, "default"
-    # Filter out very large fonts to prevent titles from skewing the body text calculation
-    font_sizes = [b['font_size'] for b in blocks if b['font_size'] < 20]
-    if not font_sizes:
-        font_sizes = [b['font_size'] for b in blocks] # Fallback if all fonts are large
+class PDFStructureExtractor:
+    def __init__(self):
+        self.heading_patterns = [
+            r'^\d+\.\s+[A-Z]',          # e.g., "1. Introduction"
+            r'^[A-Z][A-Z\s]{5,}[A-Z]$',  # ALL CAPS HEADING
+            r'^\d+\.\d+\.?\s+',         # e.g., "1.1 Background"
+            r'^\d+\.\d+\.\d+\.?\s+',     # e.g., "1.1.1 Details"
+        ]
+
+    def extract_pdf_outline(self, pdf_path: str) -> Dict[str, Any]:
+        """Main function to extract structured outline from PDF."""
+        try:
+            logger.info(f"Starting extraction for {Path(pdf_path).name}")
+            title = self._extract_title(pdf_path)
+            headings = self._extract_headings(pdf_path)
+            return self._generate_outline_json(title, headings)
+        except Exception as e:
+            logger.error(f"Error extracting from {Path(pdf_path).name}: {e}")
+            return {"title": "", "outline": [], "error": str(e)}
+
+    def _extract_title(self, pdf_path: str) -> str:
+        """Extract document title from metadata or first page."""
+        try:
+            with open(pdf_path, 'rb') as file:
+                pdf_reader = PdfReader(file)
+                if pdf_reader.metadata and pdf_reader.metadata.title:
+                    title = pdf_reader.metadata.title.strip()
+                    if len(title) > 5: return title
+        except Exception:
+            pass # Fallback to text extraction
+
+        try:
+            with pdfplumber.open(pdf_path) as pdf:
+                first_page = pdf.pages[0]
+                words = first_page.extract_words(keep_blank_chars=False, use_text_flow=True)
+                # Assume the line with the largest font size on the top half of the page is the title
+                top_half_words = [w for w in words if w['top'] < first_page.height / 2]
+                if not top_half_words: return "Untitled Document"
+                
+                max_size = max(w['size'] for w in top_half_words)
+                title_words = [w['text'] for w in top_half_words if w['size'] > max_size * 0.9]
+                return " ".join(title_words) if title_words else "Untitled Document"
+        except Exception:
+            return "Untitled Document"
+
+    def _extract_headings(self, pdf_path: str) -> List[Dict[str, Any]]:
+        """Extract headings with their levels and page numbers."""
+        headings = []
+        with pdfplumber.open(pdf_path) as pdf:
+            for i, page in enumerate(pdf.pages):
+                logger.debug(f"Processing page {i+1}/{len(pdf.pages)} for headings...")
+                lines = page.extract_text_lines(layout=True, strip=True)
+                for line in lines:
+                    text = line['text']
+                    if len(text) < 4 or len(text) > 200: continue
+                    
+                    level = self._determine_heading_level(text)
+                    if level:
+                        headings.append({
+                            "level": level,
+                            "text": text,
+                            "page": i + 1,
+                        })
         
-    try:
-        body_size = statistics.mode(font_sizes)
-    except statistics.StatisticsError:
-        body_size = sorted(Counter(font_sizes).items(), key=lambda x: x[1], reverse=True)[0][0]
-    return body_size, "" # Font name is less reliable, focus on size
-
-def identify_and_classify_headings(blocks, body_size):
-    """Identifies headings using a scoring system and classifies them."""
-    headings = []
-    title_info = None
-
-    # --- Find Title ---
-    first_page_blocks = [b for b in blocks if b['page'] == 1]
-    if first_page_blocks:
-        max_font_size = max(b['font_size'] for b in first_page_blocks)
-        # The title is often the first occurrence of the largest font size
-        for b in first_page_blocks:
-            if b['font_size'] == max_font_size:
-                title_info = {'text': b['text'], 'page': 1}
-                break
-
-    # --- Smart Heading Identification using a Scoring System ---
-    heading_candidates = []
-    # Regex to find patterns like 1. 1.1. A. etc.
-    heading_pattern = re.compile(r'^\s*(\d+(\.\d+)*\.?|[A-Z]\.)\s+')
-
-    for b in blocks:
-        text = b['text']
-        font_size = b['font_size']
-        font_name = b['font_name'].lower()
+        # Post-process to remove duplicates and limit size
+        seen = set()
+        unique_headings = []
+        for h in headings:
+            key = (h['text'], h['page'])
+            if key not in seen:
+                seen.add(key)
+                unique_headings.append(h)
         
-        # Skip the title itself
-        if title_info and text == title_info['text'] and b['page'] == 1:
-            continue
+        logger.info(f"Found {len(unique_headings)} unique headings in {Path(pdf_path).name}.")
+        return unique_headings[:150] # Limit to 150 headings
 
-        score = 0
-        # Criterion 1: Font size is larger than body text
-        if font_size > body_size + 1:
-            score += 2
-        # Criterion 2: Font is bold
-        if 'bold' in font_name:
-            score += 1
-        # Criterion 3: Starts with a numbering pattern
-        if heading_pattern.match(text):
-            score += 5 # This is a very strong indicator
-        # Criterion 4: It's short (likely not a full paragraph)
-        if len(text.split()) < 15:
-            score += 1
-        # Criterion 5: All caps (but not too short, to avoid single letters)
-        if text.isupper() and len(text) > 2:
-            score += 1
+    def _determine_heading_level(self, text: str) -> str:
+        """Determines heading level based on patterns."""
+        if re.match(r'^\d+\.\s', text): return "H1"
+        if re.match(r'^\d+\.\d+\.?\s', text): return "H2"
+        if re.match(r'^\d+\.\d+\.\d+\.?\s', text): return "H3"
+        if text.isupper() and len(text.split()) < 7: return "H1"
+        if text.istitle() and len(text.split()) < 10 and not text.endswith('.'): return "H2"
+        return "" # Not a heading
 
-        if score >= 4: # Tune this threshold as needed
-             heading_candidates.append(b)
-
-    # --- Classify Cleaned Headings ---
-    if not heading_candidates:
-        return [], title_info
-
-    # Use font sizes to determine H1, H2, H3 levels from the clean candidates
-    heading_styles = sorted(list(set(b['font_size'] for b in heading_candidates)), reverse=True)
-    style_map = {style: f"H{i+1}" for i, style in enumerate(heading_styles[:3])}
-
-    for b in heading_candidates:
-        if b['font_size'] in style_map:
-            headings.append({
-                "level": style_map[b['font_size']],
-                "text": b['text'],
-                "page": b['page'],
-                "y_pos": b['y_pos']
-            })
-
-    return sorted(headings, key=lambda x: (x['page'], x['y_pos'])), title_info
-
-
-def group_text_into_sections(blocks, headings):
-    """Groups raw text blocks under the most recent heading."""
-    sections = []
-    if not headings: return []
-
-    for i, heading in enumerate(headings):
-        start_page = heading['page']
-        start_y = heading['y_pos']
-        
-        # Determine the boundary of the section
-        end_page = headings[i+1]['page'] if i + 1 < len(headings) else float('inf')
-        end_y = headings[i+1]['y_pos'] if i + 1 < len(headings) else float('inf')
-
-        content = ""
-        for block in blocks:
-            is_after_start = block['page'] > start_page or (block['page'] == start_page and block['y_pos'] > start_y)
-            is_before_end = block['page'] < end_page or (block['page'] == end_page and block['y_pos'] < end_y)
-            
-            # Ensure the block is not another heading
-            is_heading = any(h['text'] == block['text'] and h['page'] == block['page'] for h in headings)
-            
-            if is_after_start and is_before_end and not is_heading:
-                content += block['text'] + "\n"
-        
-        sections.append({
-            'heading_text': heading['text'],
-            'heading_level': heading['level'],
-            'page': heading['page'],
-            'content': content.strip()
-        })
-    return sections
-
-
-def generate_outline_from_pdf(pdf_path):
-    """Main function for Round 1A to generate a structured JSON outline."""
-    try:
-        doc = fitz.open(pdf_path)
-    except Exception as e:
-        return json.dumps({"error": f"Could not open PDF: {e}"})
-
-    blocks = extract_text_blocks(doc)
-    doc.close()
-    if not blocks: return json.dumps({"title": "", "outline": []})
-
-    body_size, _ = get_body_text_style(blocks)
-    headings, title_info = identify_and_classify_headings(blocks, body_size)
-    
-    title = title_info['text'] if title_info else "Untitled"
-    
-    outline = [{"level": h['level'], "text": h['text'], "page": h['page']} for h in headings]
-    
-    output_json = {"title": title, "outline": outline}
-    return json.dumps(output_json, indent=4)
+    def _generate_outline_json(self, title: str, headings: List[Dict]) -> Dict[str, Any]:
+        """Generates the final JSON structure."""
+        return {
+            "title": title,
+            "outline": headings,
+            "extraction_timestamp": datetime.now().isoformat(),
+            "total_headings": len(headings)
+        }
